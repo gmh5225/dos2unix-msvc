@@ -790,14 +790,7 @@ void PrintVersion(const char *progname, const char *localedir)
  */
 FILE* OpenInFile(char *ipFN)
 {
-#ifdef D2U_UNIFILE
-  wchar_t pathw[D2U_MAX_PATH];
-
-  d2u_MultiByteToWideChar(CP_UTF8, 0, ipFN, -1, pathw, D2U_MAX_PATH);
-  return _wfopen(pathw, R_CNTRLW);
-#else
   return (fopen(ipFN, R_CNTRL));
-#endif
 }
 
 
@@ -1372,44 +1365,19 @@ int check_unicode(FILE *InF, FILE *TempF,  CFlag *ipFlag, const char *ipInFN, co
     }
   }
 #endif
+
   if ((InF = read_bom(InF, &ipFlag->bomtype)) == NULL) {
     d2u_getc_error(ipFlag,progname);
     return -1;
   }
   if (ipFlag->verbose > 1)
     print_bom(ipFlag->bomtype, ipInFN, progname);
-#ifndef D2U_UNICODE
-  /* It is possible that an UTF-16 has no 8-bit binary symbols. We must stop
-   * processing an UTF-16 file when UTF-16 is not supported. Don't trust on
-   * finding a binary symbol.
-   */
-  if ((ipFlag->bomtype == FILE_UTF16LE) || (ipFlag->bomtype == FILE_UTF16BE)) {
-    ipFlag->status |= UNICODE_NOT_SUPPORTED ;
-    return -1;
-  }
-#endif
+
 #ifdef D2U_UNICODE
   if ((ipFlag->bomtype == FILE_MBS) && (ipFlag->ConvMode == CONVMODE_UTF16LE))
     ipFlag->bomtype = FILE_UTF16LE;
   if ((ipFlag->bomtype == FILE_MBS) && (ipFlag->ConvMode == CONVMODE_UTF16BE))
     ipFlag->bomtype = FILE_UTF16BE;
-
-
-#if !defined(_WIN32) && !defined(__CYGWIN__) /* Not Windows or Cygwin */
-  if (!ipFlag->keep_utf16 && ((ipFlag->bomtype == FILE_UTF16LE) || (ipFlag->bomtype == FILE_UTF16BE))) {
-    if (sizeof(wchar_t) < 4) {
-      /* A decoded UTF-16 surrogate pair must fit in a wchar_t */
-      ipFlag->status |= WCHAR_T_TOO_SMALL ;
-      if (!ipFlag->error) ipFlag->error = 1;
-      return -1;
-    }
-  }
-#endif
-
-#if !defined(__MSDOS__) && !defined(_WIN32) && !defined(__OS2__)  /* Unix, Cygwin */
-  if (strcmp(nl_langinfo(CODESET), "GB18030") == 0)
-    ipFlag->locale_target = TARGET_GB18030;
-#endif
 #endif
 
   if ((ipFlag->add_bom) || ((ipFlag->keep_bom) && (ipFlag->bomtype > 0)))
@@ -1434,75 +1402,17 @@ int ConvertNewFile(char *ipInFN, char *ipOutFN, CFlag *ipFlag, const char *progn
   FILE *TempF = NULL;
   char *TempPath;
   char *errstr;
-#ifdef D2U_UNIFILE
-   struct _stat StatBuf;
-   wchar_t pathw[D2U_MAX_PATH];
-#else
   struct stat StatBuf;
-#endif
   struct utimbuf UTimeBuf;
-#ifndef NO_CHMOD
-  mode_t mask;
-#endif
   char *TargetFN = NULL;
   int ResolveSymlinkResult = 0;
 
   ipFlag->status = 0 ;
 
-  /* Test if output file is a symbolic link */
-  if (symbolic_link(ipOutFN) && !ipFlag->Follow) {
-    ipFlag->status |= OUTPUTFILE_SYMLINK ;
-    /* Not a failure, skipping input file according spec. (keep symbolic link unchanged) */
-    return -1;
-  }
-
-  /* Test if input file is a regular file or symbolic link */
-  if (regfile(ipInFN, 1, ipFlag, progname)) {
-    ipFlag->status |= NO_REGFILE ;
-    /* Not a failure, skipping non-regular input file according spec. */
-    return -1;
-  }
-
-  /* Test if input file target is a regular file */
-  if (symbolic_link(ipInFN) && regfile_target(ipInFN, ipFlag,progname)) {
-    ipFlag->status |= INPUT_TARGET_NO_REGFILE ;
-    /* Not a failure, skipping non-regular input file according spec. */
-    return -1;
-  }
-
-  /* Test if output file target is a regular file */
-  if (symbolic_link(ipOutFN) && (ipFlag->Follow == SYMLINK_FOLLOW) && regfile_target(ipOutFN, ipFlag,progname)) {
-    ipFlag->status |= OUTPUT_TARGET_NO_REGFILE ;
-    /* Failure, input is regular, cannot produce output. */
-    if (!ipFlag->error) ipFlag->error = 1;
-    return -1;
-  }
-
-  /* retrieve ipInFN file date stamp */
-#ifdef D2U_UNIFILE
-  d2u_MultiByteToWideChar(CP_UTF8, 0, ipInFN, -1, pathw, D2U_MAX_PATH);
-  if (_wstat(pathw, &StatBuf)) {
-#else
-  if (stat(ipInFN, &StatBuf)) {
-#endif
-    if (ipFlag->verbose) {
-      ipFlag->error = errno;
-      errstr = strerror(errno);
-      D2U_UTF8_FPRINTF(stderr, "%s: %s:", progname, ipInFN);
-      D2U_ANSI_FPRINTF(stderr, " %s\n", errstr);
-    }
-    return -1;
-  }
-
   /* can open in file? */
-  InF=OpenInFile(ipInFN);
+  InF = fopen(ipInFN, "rb");
   if (InF == NULL) {
-    if (ipFlag->verbose) {
-      ipFlag->error = errno;
-      errstr = strerror(errno);
-      D2U_UTF8_FPRINTF(stderr, "%s: %s:", progname, ipInFN);
-      D2U_ANSI_FPRINTF(stderr, " %s\n", errstr);
-    }
+    printf("fopen failed\n");
     return -1;
   }
 
@@ -1522,19 +1432,11 @@ int ConvertNewFile(char *ipInFN, char *ipOutFN, CFlag *ipFlag, const char *progn
     RetVal = -1;
   }
 
-#if DEBUG
-  if (TempPath != NULL) {
-    D2U_UTF8_FPRINTF(stderr, "%s: ", progname);
-    D2U_UTF8_FPRINTF(stderr, _("using %s as temporary file\n"), TempPath);
-  }
-#endif
-
   if (!RetVal)
     if (check_unicode(InF, TempF, ipFlag, ipInFN, progname))
       RetVal = -1;
 
   /* conversion successful? */
-#ifdef D2U_UNICODE
   if ((ipFlag->bomtype == FILE_UTF16LE) || (ipFlag->bomtype == FILE_UTF16BE)) {
     if ((!RetVal) && (ConvertW(InF, TempF, ipFlag, progname)))
       RetVal = -1;
@@ -1546,12 +1448,8 @@ int ConvertNewFile(char *ipInFN, char *ipOutFN, CFlag *ipFlag, const char *progn
     if ((!RetVal) && (Convert(InF, TempF, ipFlag, progname)))
       RetVal = -1;
   }
-#else
-  if ((!RetVal) && (Convert(InF, TempF, ipFlag, progname)))
-    RetVal = -1;
-#endif
 
-   /* can close in file? */
+  /* can close in file? */
   if (d2u_fclose(InF, ipInFN, ipFlag, "r", progname) == EOF)
     RetVal = -1;
 
@@ -1561,84 +1459,6 @@ int ConvertNewFile(char *ipInFN, char *ipOutFN, CFlag *ipFlag, const char *progn
       RetVal = -1;
   }
 
-#ifndef NO_CHMOD
-  if (!RetVal)
-  {
-    if (ipFlag->NewFile == 0) { /* old-file mode */
-       RetVal = chmod (TempPath, StatBuf.st_mode); /* set original permissions */
-    } else {
-       mask = umask(0); /* get process's umask */
-       umask(mask); /* set umask back to original */
-       RetVal = chmod(TempPath, StatBuf.st_mode & ~mask); /* set original permissions, minus umask */
-    }
-
-    if (RetVal) {
-       if (ipFlag->verbose) {
-         ipFlag->error = errno;
-         errstr = strerror(errno);
-         D2U_UTF8_FPRINTF(stderr, "%s: ", progname);
-         D2U_UTF8_FPRINTF(stderr, _("Failed to change the permissions of temporary output file %s:"), TempPath);
-         D2U_ANSI_FPRINTF(stderr, " %s\n", errstr);
-       }
-    }
-  }
-#endif
-
-#ifndef NO_CHOWN
-  if (!RetVal && (ipFlag->NewFile == 0)) { /* old-file mode */
-     /* Change owner and group of the temporary output file to the original file's uid and gid. */
-     /* Required when a different user (e.g. root) has write permission on the original file. */
-     /* Make sure that the original owner can still access the file. */
-     if (chown(TempPath, StatBuf.st_uid, StatBuf.st_gid)) {
-        if (ipFlag->AllowChown) {
-          if (ipFlag->verbose) {
-            D2U_UTF8_FPRINTF(stderr, "%s: ", progname);
-            D2U_UTF8_FPRINTF(stderr, _("The user and/or group ownership of file %s is not preserved.\n"), ipOutFN);
-          }
-#ifndef NO_CHMOD
-          /* Set read/write permissions same as in new file mode. */
-          mask = umask(0); /* get process's umask */
-          umask(mask); /* set umask back to original */
-          RetVal = chmod(TempPath, StatBuf.st_mode & ~mask); /* set original permissions, minus umask */
-          if (RetVal) {
-             if (ipFlag->verbose) {
-               ipFlag->error = errno;
-               errstr = strerror(errno);
-               D2U_UTF8_FPRINTF(stderr, "%s: ", progname);
-               D2U_UTF8_FPRINTF(stderr, _("Failed to change the permissions of temporary output file %s:"), TempPath);
-               D2U_ANSI_FPRINTF(stderr, " %s\n", errstr);
-             }
-          }
-#endif
-        } else {
-          if (ipFlag->verbose) {
-            ipFlag->error = errno;
-            errstr = strerror(errno);
-            D2U_UTF8_FPRINTF(stderr, "%s: ", progname);
-            D2U_UTF8_FPRINTF(stderr, _("Failed to change the owner and group of temporary output file %s:"), TempPath);
-            D2U_ANSI_FPRINTF(stderr, " %s\n", errstr);
-          }
-          RetVal = -1;
-        }
-     }
-  }
-#endif
-
-  if ((!RetVal) && (ipFlag->KeepDate))
-  {
-    UTimeBuf.actime = StatBuf.st_atime;
-    UTimeBuf.modtime = StatBuf.st_mtime;
-    /* can change output file time to in file time? */
-    if (utime(TempPath, &UTimeBuf) == -1) {
-      if (ipFlag->verbose) {
-        ipFlag->error = errno;
-        errstr = strerror(errno);
-        D2U_UTF8_FPRINTF(stderr, "%s: %s:", progname, TempPath);
-        D2U_ANSI_FPRINTF(stderr, " %s\n", errstr);
-      }
-      RetVal = -1;
-    }
-  }
 
   /* any error? cleanup the temp file */
   if (RetVal && (TempPath != NULL)) {
@@ -1650,24 +1470,6 @@ int ConvertNewFile(char *ipInFN, char *ipOutFN, CFlag *ipFlag, const char *progn
         D2U_ANSI_FPRINTF(stderr, " %s\n", errstr);
       }
       RetVal = -1;
-    }
-  }
-
-  /* If output file is a symbolic link, optional resolve the link and modify  */
-  /* the target, instead of removing the link and creating a new regular file */
-  TargetFN = ipOutFN;
-  if (symbolic_link(ipOutFN) && !RetVal) {
-    ResolveSymlinkResult = 0; /* indicates that TargetFN need not be freed */
-    if (ipFlag->Follow == SYMLINK_FOLLOW) {
-      ResolveSymlinkResult = ResolveSymbolicLink(ipOutFN, &TargetFN, ipFlag, progname);
-      if (ResolveSymlinkResult < 0) {
-        if (ipFlag->verbose) {
-          D2U_UTF8_FPRINTF(stderr, "%s: ", progname);
-          D2U_UTF8_FPRINTF(stderr, _("problems resolving symbolic link '%s'\n"), ipOutFN);
-          D2U_UTF8_FPRINTF(stderr, _("          output file remains in '%s'\n"), TempPath);
-        }
-        RetVal = -1;
-      }
     }
   }
 
@@ -1692,10 +1494,6 @@ int ConvertNewFile(char *ipInFN, char *ipOutFN, CFlag *ipFlag, const char *progn
         D2U_UTF8_FPRINTF(stderr, "%s: ", progname);
         D2U_UTF8_FPRINTF(stderr, _("problems renaming '%s' to '%s':"), TempPath, TargetFN);
         D2U_ANSI_FPRINTF(stderr, " %s\n", errstr);
-#ifdef S_ISLNK
-        if (ResolveSymlinkResult > 0)
-          D2U_UTF8_FPRINTF(stderr, _("          which is the target of symbolic link '%s'\n"), ipOutFN);
-#endif
         D2U_UTF8_FPRINTF(stderr, _("          output file remains in '%s'\n"), TempPath);
       }
       RetVal = -1;
@@ -2290,9 +2088,6 @@ int parse_options(int argc, char *argv[],
   int ShouldExit = 0;
   int CanSwitchFileMode = 1;
   int process_options = 1;
-#ifdef D2U_UNIFILE
-  char *ptr;
-#endif
 
   /* variable initialisations */
   pFlag->NewFile = 0;
@@ -2311,280 +2106,10 @@ int parse_options(int argc, char *argv[],
   pFlag->file_info = 0;
   pFlag->locale_target = TARGET_UTF8;
 
-#ifdef D2U_UNIFILE
-   ptr = getenv("DOS2UNIX_DISPLAY_ENC");
-   if (ptr != NULL) {
-      if (strncmp(ptr, "ansi", sizeof("ansi")) == 0)
-         d2u_display_encoding = D2U_DISPLAY_ANSI;
-      else if (strncmp(ptr, "unicode", sizeof("unicode")) == 0)
-         d2u_display_encoding = D2U_DISPLAY_UNICODE;
-      else if (strncmp(ptr, "unicodebom", sizeof("unicodebom")) == 0)
-         d2u_display_encoding = D2U_DISPLAY_UNICODEBOM;
-      else if (strncmp(ptr, "utf8", sizeof("utf8")) == 0)
-         d2u_display_encoding = D2U_DISPLAY_UTF8;
-      else if (strncmp(ptr, "utf8bom", sizeof("utf8bom")) == 0)
-         d2u_display_encoding = D2U_DISPLAY_UTF8BOM;
-   }
-#endif
+  ++ArgIdx;
 
-  while ((++ArgIdx < argc) && (!ShouldExit))
-  {
-    /* is it an option? */
-    if ((argv[ArgIdx][0] == '-') && process_options)
-    {
-      /* an option */
-      if (strcmp(argv[ArgIdx],"--") == 0)
-        process_options = 0;
-      else if ((strcmp(argv[ArgIdx],"-h") == 0) || (strcmp(argv[ArgIdx],"--help") == 0))
-      {
-        PrintUsage(progname);
-        return(pFlag->error);
-      }
-      else if ((strcmp(argv[ArgIdx],"-b") == 0) || (strcmp(argv[ArgIdx],"--keep-bom") == 0))
-        pFlag->keep_bom = 1;
-      else if ((strcmp(argv[ArgIdx],"-k") == 0) || (strcmp(argv[ArgIdx],"--keepdate") == 0))
-        pFlag->KeepDate = 1;
-      else if ((strcmp(argv[ArgIdx],"-f") == 0) || (strcmp(argv[ArgIdx],"--force") == 0))
-        pFlag->Force = 1;
-#ifndef NO_CHOWN
-      else if (strcmp(argv[ArgIdx],"--allow-chown") == 0)
-        pFlag->AllowChown = 1;
-      else if (strcmp(argv[ArgIdx],"--no-allow-chown") == 0)
-        pFlag->AllowChown = 0;
-#endif
-#ifdef D2U_UNICODE
-#if (defined(_WIN32) && !defined(__CYGWIN__))
-      else if ((strcmp(argv[ArgIdx],"-gb") == 0) || (strcmp(argv[ArgIdx],"--gb18030") == 0))
-        pFlag->locale_target = TARGET_GB18030;
-#endif
-#endif
-      else if ((strcmp(argv[ArgIdx],"-s") == 0) || (strcmp(argv[ArgIdx],"--safe") == 0))
-        pFlag->Force = 0;
-      else if ((strcmp(argv[ArgIdx],"-q") == 0) || (strcmp(argv[ArgIdx],"--quiet") == 0))
-        pFlag->verbose = 0;
-      else if ((strcmp(argv[ArgIdx],"-v") == 0) || (strcmp(argv[ArgIdx],"--verbose") == 0))
-        pFlag->verbose = 2;
-      else if ((strcmp(argv[ArgIdx],"-l") == 0) || (strcmp(argv[ArgIdx],"--newline") == 0))
-        pFlag->NewLine = 1;
-      else if ((strcmp(argv[ArgIdx],"-m") == 0) || (strcmp(argv[ArgIdx],"--add-bom") == 0))
-        pFlag->add_bom = 1;
-      else if ((strcmp(argv[ArgIdx],"-r") == 0) || (strcmp(argv[ArgIdx],"--remove-bom") == 0)) {
-        pFlag->keep_bom = 0;
-        pFlag->add_bom = 0;
-      }
-      else if ((strcmp(argv[ArgIdx],"-S") == 0) || (strcmp(argv[ArgIdx],"--skip-symlink") == 0))
-        pFlag->Follow = SYMLINK_SKIP;
-      else if ((strcmp(argv[ArgIdx],"-F") == 0) || (strcmp(argv[ArgIdx],"--follow-symlink") == 0))
-        pFlag->Follow = SYMLINK_FOLLOW;
-      else if ((strcmp(argv[ArgIdx],"-R") == 0) || (strcmp(argv[ArgIdx],"--replace-symlink") == 0))
-        pFlag->Follow = SYMLINK_REPLACE;
-      else if ((strcmp(argv[ArgIdx],"-V") == 0) || (strcmp(argv[ArgIdx],"--version") == 0)) {
-        PrintVersion(progname, localedir);
-        return(pFlag->error);
-      }
-      else if ((strcmp(argv[ArgIdx],"-L") == 0) || (strcmp(argv[ArgIdx],"--license") == 0)) {
-        PrintLicense();
-        return(pFlag->error);
-      }
-      else if (strcmp(argv[ArgIdx],"-ascii") == 0) { /* SunOS compatible options */
-        pFlag->ConvMode = CONVMODE_ASCII;
-        pFlag->keep_utf16 = 0;
-        pFlag->locale_target = TARGET_UTF8;
-      }
-      else if (strcmp(argv[ArgIdx],"-7") == 0)
-        pFlag->ConvMode = CONVMODE_7BIT;
-      else if (strcmp(argv[ArgIdx],"-iso") == 0) {
-        pFlag->ConvMode = (int)query_con_codepage();
-        if (pFlag->verbose) {
-           D2U_UTF8_FPRINTF(stderr,"%s: ",progname);
-           D2U_UTF8_FPRINTF(stderr,_("active code page: %d\n"), pFlag->ConvMode);
-        }
-        if (pFlag->ConvMode < 2)
-           pFlag->ConvMode = CONVMODE_437;
-      }
-      else if (strcmp(argv[ArgIdx],"-437") == 0)
-        pFlag->ConvMode = CONVMODE_437;
-      else if (strcmp(argv[ArgIdx],"-850") == 0)
-        pFlag->ConvMode = CONVMODE_850;
-      else if (strcmp(argv[ArgIdx],"-860") == 0)
-        pFlag->ConvMode = CONVMODE_860;
-      else if (strcmp(argv[ArgIdx],"-863") == 0)
-        pFlag->ConvMode = CONVMODE_863;
-      else if (strcmp(argv[ArgIdx],"-865") == 0)
-        pFlag->ConvMode = CONVMODE_865;
-      else if (strcmp(argv[ArgIdx],"-1252") == 0)
-        pFlag->ConvMode = CONVMODE_1252;
-#ifdef D2U_UNICODE
-      else if ((strcmp(argv[ArgIdx],"-u") == 0) || (strcmp(argv[ArgIdx],"--keep-utf16") == 0))
-        pFlag->keep_utf16 = 1;
-      else if ((strcmp(argv[ArgIdx],"-ul") == 0) || (strcmp(argv[ArgIdx],"--assume-utf16le") == 0))
-        pFlag->ConvMode = CONVMODE_UTF16LE;
-      else if ((strcmp(argv[ArgIdx],"-ub") == 0) || (strcmp(argv[ArgIdx],"--assume-utf16be") == 0))
-        pFlag->ConvMode = CONVMODE_UTF16BE;
-#endif
-      else if (strcmp(argv[ArgIdx],"--info") == 0)
-        pFlag->file_info |= INFO_DEFAULT;
-      else if (strncmp(argv[ArgIdx],"--info=", (size_t)7) == 0) {
-        get_info_options(argv[ArgIdx]+7, pFlag, progname);
-      } else if (strncmp(argv[ArgIdx],"-i", (size_t)2) == 0) {
-        get_info_options(argv[ArgIdx]+2, pFlag, progname);
-      } else if ((strcmp(argv[ArgIdx],"-c") == 0) || (strcmp(argv[ArgIdx],"--convmode") == 0)) {
-        if (++ArgIdx < argc) {
-          if (strcmpi(argv[ArgIdx],"ascii") == 0) { /* Benjamin Lin's legacy options */
-            pFlag->ConvMode = CONVMODE_ASCII;
-            pFlag->keep_utf16 = 0;
-          }
-          else if (strcmpi(argv[ArgIdx], "7bit") == 0)
-            pFlag->ConvMode = CONVMODE_7BIT;
-          else if (strcmpi(argv[ArgIdx], "iso") == 0) {
-            pFlag->ConvMode = (int)query_con_codepage();
-            if (pFlag->verbose) {
-               D2U_UTF8_FPRINTF(stderr,"%s: ",progname);
-               D2U_UTF8_FPRINTF(stderr,_("active code page: %d\n"), pFlag->ConvMode);
-            }
-            if (pFlag->ConvMode < 2)
-               pFlag->ConvMode = CONVMODE_437;
-          }
-          else if (strcmpi(argv[ArgIdx], "mac") == 0) {
-            if (is_dos2unix(progname))
-              pFlag->FromToMode = FROMTO_MAC2UNIX;
-            else
-              pFlag->FromToMode = FROMTO_UNIX2MAC;
-          } else {
-            D2U_UTF8_FPRINTF(stderr,"%s: ",progname);
-            D2U_UTF8_FPRINTF(stderr, _("invalid %s conversion mode specified\n"),argv[ArgIdx]);
-            pFlag->error = 1;
-            ShouldExit = 1;
-            pFlag->stdio_mode = 0;
-          }
-        } else {
-          ArgIdx--;
-          D2U_UTF8_FPRINTF(stderr,"%s: ",progname);
-          D2U_UTF8_FPRINTF(stderr,_("option '%s' requires an argument\n"),argv[ArgIdx]);
-          pFlag->error = 1;
-          ShouldExit = 1;
-          pFlag->stdio_mode = 0;
-        }
-      }
+  int conversion_error = ConvertNewFile(argv[ArgIdx], argv[ArgIdx], pFlag, progname, Convert, ConvertW);
 
-#ifdef D2U_UNIFILE
-      else if ((strcmp(argv[ArgIdx],"-D") == 0) || (strcmp(argv[ArgIdx],"--display-enc") == 0)) {
-        if (++ArgIdx < argc) {
-          if (strcmpi(argv[ArgIdx],"ansi") == 0)
-            d2u_display_encoding = D2U_DISPLAY_ANSI;
-          else if (strcmpi(argv[ArgIdx], "unicode") == 0)
-            d2u_display_encoding = D2U_DISPLAY_UNICODE;
-          else if (strcmpi(argv[ArgIdx], "unicodebom") == 0)
-            d2u_display_encoding = D2U_DISPLAY_UNICODEBOM;
-          else if (strcmpi(argv[ArgIdx], "utf8") == 0)
-            d2u_display_encoding = D2U_DISPLAY_UTF8;
-          else if (strcmpi(argv[ArgIdx], "utf8bom") == 0) {
-            d2u_display_encoding = D2U_DISPLAY_UTF8BOM;
-          } else {
-            D2U_UTF8_FPRINTF(stderr,"%s: ",progname);
-            D2U_UTF8_FPRINTF(stderr, _("invalid %s display encoding specified\n"),argv[ArgIdx]);
-            pFlag->error = 1;
-            ShouldExit = 1;
-            pFlag->stdio_mode = 0;
-          }
-        } else {
-          ArgIdx--;
-          D2U_UTF8_FPRINTF(stderr,"%s: ",progname);
-          D2U_UTF8_FPRINTF(stderr,_("option '%s' requires an argument\n"),argv[ArgIdx]);
-          pFlag->error = 1;
-          ShouldExit = 1;
-          pFlag->stdio_mode = 0;
-        }
-      }
-#endif
-
-      else if ((strcmp(argv[ArgIdx],"-o") == 0) || (strcmp(argv[ArgIdx],"--oldfile") == 0)) {
-        /* last convert not paired */
-        if (!CanSwitchFileMode) {
-          D2U_UTF8_FPRINTF(stderr,"%s: ",progname);
-          D2U_UTF8_FPRINTF(stderr, _("target of file %s not specified in new-file mode\n"), argv[ArgIdx-1]);
-          pFlag->error = 1;
-          ShouldExit = 1;
-          pFlag->stdio_mode = 0;
-        }
-        pFlag->NewFile = 0;
-        pFlag->file_info = 0;
-      }
-
-      else if ((strcmp(argv[ArgIdx],"-n") == 0) || (strcmp(argv[ArgIdx],"--newfile") == 0)) {
-        /* last convert not paired */
-        if (!CanSwitchFileMode) {
-          D2U_UTF8_FPRINTF(stderr,"%s: ",progname);
-          D2U_UTF8_FPRINTF(stderr, _("target of file %s not specified in new-file mode\n"), argv[ArgIdx-1]);
-          pFlag->error = 1;
-          ShouldExit = 1;
-          pFlag->stdio_mode = 0;
-        }
-        pFlag->NewFile = 1;
-        pFlag->file_info = 0;
-      }
-      else { /* wrong option */
-        PrintUsage(progname);
-        ShouldExit = 1;
-        pFlag->error = 1;
-        pFlag->stdio_mode = 0;
-      }
-    } else {
-      /* not an option */
-      int conversion_error;
-      pFlag->stdio_mode = 0;
-      if (pFlag->NewFile) {
-        if (CanSwitchFileMode)
-          CanSwitchFileMode = 0;
-        else {
-#ifdef D2U_UNICODE
-          conversion_error = ConvertNewFile(argv[ArgIdx-1], argv[ArgIdx], pFlag, progname, Convert, ConvertW);
-#else
-          conversion_error = ConvertNewFile(argv[ArgIdx-1], argv[ArgIdx], pFlag, progname, Convert);
-#endif
-          if (pFlag->verbose)
-            print_messages(pFlag, argv[ArgIdx-1], argv[ArgIdx], progname, conversion_error);
-          CanSwitchFileMode = 1;
-        }
-      } else {
-        if (pFlag->file_info) {
-          conversion_error = GetFileInfo(argv[ArgIdx], pFlag, progname);
-          print_messages_info(pFlag, argv[ArgIdx], progname);
-        } else {
-#ifdef D2U_UNICODE
-          conversion_error = ConvertNewFile(argv[ArgIdx], argv[ArgIdx], pFlag, progname, Convert, ConvertW);
-#else
-          conversion_error = ConvertNewFile(argv[ArgIdx], argv[ArgIdx], pFlag, progname, Convert);
-#endif
-          if (pFlag->verbose)
-            print_messages(pFlag, argv[ArgIdx], NULL, progname, conversion_error);
-        }
-      }
-    }
-  }
-
-  /* no file argument, use stdin and stdout */
-  if ( (argc > 0) && pFlag->stdio_mode) {
-    if (pFlag->file_info) {
-      GetFileInfoStdio(pFlag, progname);
-      print_messages_info(pFlag, "stdin", progname);
-    } else {
-#ifdef D2U_UNICODE
-      ConvertStdio(pFlag, progname, Convert, ConvertW);
-#else
-      ConvertStdio(pFlag, progname, Convert);
-#endif
-      if (pFlag->verbose)
-        print_messages_stdio(pFlag, progname);
-    }
-    return pFlag->error;
-  }
-
-  if (!CanSwitchFileMode) {
-    D2U_UTF8_FPRINTF(stderr,"%s: ",progname);
-    D2U_UTF8_FPRINTF(stderr, _("target of file %s not specified in new-file mode\n"), argv[ArgIdx-1]);
-    pFlag->error = 1;
-  }
   return pFlag->error;
 }
 
